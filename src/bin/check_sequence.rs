@@ -1,8 +1,10 @@
 extern crate flate2;
+extern crate rayon;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 extern crate serde_json;
 
+use rayon::prelude::*;
 use std::env;
 use std::collections::BTreeMap;
 //use std::collections::btree_map::Entry;
@@ -16,29 +18,42 @@ struct Message {
     product_id: String,
 }
 
-struct SequenceChecker {
-    products: BTreeMap<String, u64>,
+struct SeqRange {
+    begin: u64,
+    end: u64,
 }
 
-impl SequenceChecker {
-    fn new() -> SequenceChecker {
-        SequenceChecker{ products: BTreeMap::new() }
+struct SeqChecker {
+    products: BTreeMap<String, SeqRange>,
+}
+
+impl SeqChecker {
+    fn new() -> SeqChecker {
+        SeqChecker{ products: BTreeMap::new() }
     }
 
     fn update<'b>(&mut self, m: &'b Message) -> Event<'b> {
         match self.products.get_mut(&m.product_id) {
-            Some(id) => {
-                let last_sequence = *id;
-                *id = m.sequence;
+            Some(entry) => {
+                let last_sequence = entry.end;
+                entry.end = m.sequence;
                 if last_sequence + 1 != m.sequence {
-                    return Event::Skipped(&m.product_id, last_sequence, *id);
+                    return Event::Skipped(&m.product_id, last_sequence, m.sequence);
                 }
                 return Event::Ok;
             },
             None => {},
         }
-        self.products.insert(m.product_id.clone(), m.sequence);
+        self.products.insert(m.product_id.clone(), SeqRange{ begin: m.sequence, end: m.sequence });
         Event::NewProduct(&m.product_id)
+    }
+
+    fn products(&self) -> Vec<&String> {
+        self.products.keys().collect()
+    }
+
+    fn into_ranges(self) -> BTreeMap<String, SeqRange> {
+        self.products
     }
 }
 
@@ -49,21 +64,45 @@ enum Event<'a> {
     Skipped(&'a str, u64, u64),
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
-
-    let filename = &args[1];
+fn process_file(filename: &String) -> BTreeMap<String, SeqRange> {
     let f = File::open(filename).expect("file not found");
     let d = GzDecoder::new(f);
     let b = BufReader::new(d);
 
-    let mut checker = SequenceChecker::new();
+    let mut checker = SeqChecker::new();
+    let mut products = Vec::<String>::new();
     for line in b.lines() {
         let m: Message = serde_json::from_str(&line.unwrap()).expect("failed to parse JSON");
         match checker.update(&m) {
             Event::Ok => {},
-            Event::NewProduct(p) => println!("New product {}", p),
-            Event::Skipped(p, last, new) => println!("Skipped sequence numbers between {} and {} on product {}", last, new, p),
+            Event::NewProduct(p) => {
+                products.push(p.to_owned());
+            },
+            Event::Skipped(p, last, new) => {
+                println!("{}: Skipped sequence numbers between {} and {} on product {}",
+                         filename, last, new, p);
+            },
+        }
+    }
+
+    println!("Finished checking {}. Products: {:?}", filename, products);
+    checker.into_ranges()
+}
+
+fn main() {
+    let mut args: Vec<String> = env::args().collect();
+    let files = &mut args[1..];
+    files.sort();
+
+    let ranges: Vec<BTreeMap<String, SeqRange>> = files.par_iter().map(process_file).collect();
+
+    // TODO: I'm sure we could do this more intelligently
+    for i in 1..ranges.len() {
+        for product in ranges[i-1].keys() {
+            if ranges[i-1][product].end + 1 != ranges[i][product].begin {
+                println!("Gap detected between files {} and {} on {}: end seq {}, begin seq {}",
+                         files[i-1], files[i], product, ranges[i-1][product].end, ranges[i][product].begin);
+            }
         }
     }
 }
