@@ -27,6 +27,8 @@ impl Ord for Price {
 }
 
 impl Price {
+    pub fn zero() -> Price { Price{ val: 0 } }
+
     pub fn parse(s: &str) -> Result<Price, ParseFloatError> {
         /*
         let mut val: i64;
