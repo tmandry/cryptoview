@@ -4,9 +4,9 @@ use std::ops;
 use std::fmt::Display;
 use std::num::ParseFloatError;
 
-const WHOLE: i64 = 1000000;
-const CENT: i64 = WHOLE / 100;
-const FRACTIONAL_DIGITS: usize = 4;
+const WHOLE: i64 = 100000000;
+const CENT: i64 = WHOLE / 100;       // always displayed up to this precision
+const FRACTIONAL_DIGITS: usize = 6;  // these are only displayed when used
 const FROM_WHOLE: f64 = 1.0 / WHOLE as f64;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
