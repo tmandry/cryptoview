@@ -55,6 +55,17 @@ impl Order {
     pub fn new(id: String, side: Side, px: Price, size: Price) -> Order {
         Order{id, side, px, orig_size: size, open_size: size}
     }
+
+    fn on_open(&mut self, remaining_size: Price) {
+        self.open_size = remaining_size;
+    }
+
+    fn on_match_maker(&mut self, size: Price) {
+        self.open_size -= size;
+    }
+
+    fn on_match_taker(&mut self, size: Price) {
+    }
 }
 
 impl<'a> From<&'a NewOrderEvent<'a>> for Order {
@@ -77,8 +88,8 @@ pub struct Sequence(u64);
 // Event structs. These include the data that is common to all feeds.
 
 pub struct NewOrderEvent<'a> {
-    time: Time,
     seq: Sequence,
+    time: Time,
     order_id: &'a str,
     side: Side,
     px: Price,
@@ -87,22 +98,22 @@ pub struct NewOrderEvent<'a> {
 }
 
 pub struct OpenEvent<'a> {
-    time: Time,
     seq: Sequence,
+    time: Time,
     order_id: &'a str,
     remaining_size: Price,
 }
-/*
+
 pub struct MatchEvent<'a> {
-    time: Time,
     seq: Sequence,
+    time: Time,
     maker_order_id: &'a str,
     taker_order_id: &'a str,
     side: Side,
     price: Price,
     size: Price,
 }
-
+/*
 pub struct ChangeEvent<'a> {
     time: Time,
     seq: Sequence,
@@ -127,7 +138,7 @@ pub enum DoneReason {
 pub trait Level3FeedListener {
     fn on_add<'a>(&mut self, order: &NewOrderEvent<'a>);
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>);
-    //fn on_match<E: MatchEvent>(&mut self, event: &E);
+    fn on_match<'a>(&mut self, event: &MatchEvent<'a>);
     //fn on_change<E: ChangeEvent>(&mut self, event: &E);
     //fn on_done<E: DoneEvent>(&mut self, event: &E);
 }
@@ -174,13 +185,25 @@ impl Level3FeedListener for Book {
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>) {
         let (side, px) = {
             let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
-            order.open_size = event.remaining_size;
+            order.on_open(event.remaining_size);
             (order.side, order.px)
         };
 
         let level = self.price_level_mut(side, px)
                         .expect("Price level with order doesn't exist!");
         level.open_size += event.remaining_size;
+    }
+
+    fn on_match<'a>(&mut self, event: &MatchEvent<'a>) {
+        let (maker_side, px) = {
+            let mut maker = self.orders.get(event.maker_order_id).expect("Unknown order ID").borrow_mut();
+            maker.on_match_maker(event.size);
+            (maker.side, maker.px)
+        };
+        self.orders.get(event.taker_order_id).expect("Unknown order ID").borrow_mut()
+            .on_match_taker(event.size);
+        self.price_level_mut(maker_side, px).expect("Price level with order doesn't exist!")
+            .open_size -= event.size;
     }
 }
 
@@ -196,6 +219,15 @@ mod tests {
 
     fn open_event(order_id: &str, remaining_size: Price) -> OpenEvent {
         OpenEvent{ seq: Sequence(0), time: Time(0), order_id, remaining_size }
+    }
+
+    fn match_event<'a>(maker_order_id: &'a str,
+                       taker_order_id: &'a str,
+                       side: Side,
+                       price: Price,
+                       size: Price) -> MatchEvent<'a> {
+        MatchEvent{ seq: Sequence(0), time: Time(0), maker_order_id, taker_order_id,
+                    side, price, size }
     }
 
     #[test]
@@ -218,5 +250,15 @@ mod tests {
         assert_eq!(Price::zero(), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
         book.on_open(&open_event(&"order2", px(90.)));
         assert_eq!(px(90.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
+    }
+
+    #[test]
+    fn test_match() {
+        let mut book = Book::new();
+        book.on_add(&new_event(&"order1", Side::Bid, px(10.00), px(100.)));
+        book.on_open(&open_event(&"order1", px(100.)));
+        book.on_add(&new_event(&"order2", Side::Ask, px( 9.90), px(40.)));
+        book.on_match(&match_event(&"order1", &"order2", Side::Bid, px( 9.99), px(40.)));
+        assert_eq!(px(60.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
     }
 }
