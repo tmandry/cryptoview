@@ -41,18 +41,18 @@ pub trait Level2EventListener {
     fn on_level_change(side: Side, price: Price, old_size: Price, new_size: Price, /*level_state: &mut LevelState*/);
 }
 
-type OrdersByPrice = BTreeMap<Price, PriceLevel>;
+type OrdersByPrice = BTreeMap<OrderPrice, PriceLevel>;
 
 pub struct Order {
     id: String,
     side: Side,
-    px: Price,
+    px: OrderPrice,
     orig_size: Price,
     open_size: Price,
 }
 
 impl Order {
-    pub fn new(id: String, side: Side, px: Price, size: Price) -> Order {
+    pub fn new(id: String, side: Side, px: OrderPrice, size: Price) -> Order {
         Order{id, side, px, orig_size: size, open_size: size}
     }
 
@@ -85,6 +85,13 @@ pub struct Time(u64);
 #[derive(Copy, Clone, Debug)]
 pub struct Sequence(u64);
 
+/// The type and price of the order.
+#[derive(Copy, Clone, Debug, Ord, PartialOrd, Eq, PartialEq)]
+pub enum OrderPrice {
+    Market,
+    Limit(Price),
+}
+
 // Event structs. These include the data that is common to all feeds.
 
 pub struct NewOrderEvent<'a> {
@@ -92,7 +99,7 @@ pub struct NewOrderEvent<'a> {
     time: Time,
     order_id: &'a str,
     side: Side,
-    px: Price,
+    px: OrderPrice,
     orig_size: Price,
     open_size: Price,
 }
@@ -118,7 +125,7 @@ pub struct ChangeEvent<'a> {
     time: Time,
     seq: Sequence,
     order_id: &'a str,
-    price: Option<Price>,  // None indicates market order
+    price: OrderPrice,  // None indicates market order
     old_size_or_funds: Price,
     new_size_or_funds: Price,
 }
@@ -155,13 +162,14 @@ impl Book {
     }
 
     pub fn price_level(&self, side: Side, px: Price) -> Option<&PriceLevel> {
+        // Market order "levels" are not currently exposed.
         match side {
-            Side::Bid => self.bid.get(&px),
-            Side::Ask => self.ask.get(&px),
+            Side::Bid => self.bid.get(&OrderPrice::Limit(px)),
+            Side::Ask => self.ask.get(&OrderPrice::Limit(px)),
         }
     }
 
-    fn price_level_mut(&mut self, side: Side, px: Price) -> Option<&mut PriceLevel> {
+    fn price_level_mut(&mut self, side: Side, px: OrderPrice) -> Option<&mut PriceLevel> {
         match side {
             Side::Bid => self.bid.get_mut(&px),
             Side::Ask => self.ask.get_mut(&px),
@@ -210,10 +218,11 @@ impl Level3FeedListener for Book {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use self::OrderPrice::{Limit, Market};
 
     fn px(p: f64) -> Price { Price::from(p) }
 
-    fn new_event(order_id: &str, side: Side, px: Price, orig_size: Price) -> NewOrderEvent {
+    fn new_event(order_id: &str, side: Side, px: OrderPrice, orig_size: Price) -> NewOrderEvent {
         NewOrderEvent{ seq: Sequence(0), time: Time(0), order_id, side, px, orig_size, open_size: orig_size }
     }
 
@@ -233,10 +242,10 @@ mod tests {
     #[test]
     fn total_size() {
         let mut book = Book::new();
-        book.on_add(&new_event(&"order1", Side::Bid, px(10.00), px(100.)));
+        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
         assert_eq!(px(100.), book.price_level(Side::Bid, px(10.00)).unwrap().total_size());
-        book.on_add(&new_event(&"order2", Side::Bid, px(10.00), px(90.)));
-        book.on_add(&new_event(&"order3", Side::Ask, px(10.01), px(90.)));
+        book.on_add(&new_event(&"order2", Side::Bid, Limit(px(10.00)), px(90.)));
+        book.on_add(&new_event(&"order3", Side::Ask, Limit(px(10.01)), px(90.)));
         assert_eq!(px(190.), book.price_level(Side::Bid, px(10.00)).unwrap().total_size());
         assert_eq!(px(90.), book.price_level(Side::Ask, px(10.01)).unwrap().total_size());
     }
@@ -244,9 +253,9 @@ mod tests {
     #[test]
     fn open_size() {
         let mut book = Book::new();
-        book.on_add(&new_event(&"order1", Side::Bid, px(10.00), px(100.)));
+        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
         assert_eq!(Price::zero(), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
-        book.on_add(&new_event(&"order2", Side::Bid, px(10.00), px(90.)));
+        book.on_add(&new_event(&"order2", Side::Bid, Limit(px(10.00)), px(90.)));
         assert_eq!(Price::zero(), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
         book.on_open(&open_event(&"order2", px(90.)));
         assert_eq!(px(90.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
@@ -255,9 +264,19 @@ mod tests {
     #[test]
     fn test_match() {
         let mut book = Book::new();
-        book.on_add(&new_event(&"order1", Side::Bid, px(10.00), px(100.)));
+        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
         book.on_open(&open_event(&"order1", px(100.)));
-        book.on_add(&new_event(&"order2", Side::Ask, px( 9.90), px(40.)));
+        book.on_add(&new_event(&"order2", Side::Ask, Limit(px( 9.90)), px(40.)));
+        book.on_match(&match_event(&"order1", &"order2", Side::Bid, px( 9.99), px(40.)));
+        assert_eq!(px(60.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
+    }
+
+    #[test]
+    fn test_market_match() {
+        let mut book = Book::new();
+        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
+        book.on_open(&open_event(&"order1", px(100.)));
+        book.on_add(&new_event(&"order2", Side::Ask, Market, px(40.)));
         book.on_match(&match_event(&"order1", &"order2", Side::Bid, px( 9.99), px(40.)));
         assert_eq!(px(60.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
     }
