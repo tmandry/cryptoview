@@ -1,3 +1,5 @@
+extern crate serde;
+
 pub mod book;
 
 mod price;

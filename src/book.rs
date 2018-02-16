@@ -15,7 +15,6 @@ pub enum Side {
 
 pub struct PriceLevel {
     orders: VecDeque<Rc<RefCell<Order>>>,
-    total_size: Price,
     open_size: Price,
 }
 
@@ -23,26 +22,19 @@ impl PriceLevel {
     fn new() -> PriceLevel {
         PriceLevel {
             orders: VecDeque::new(),
-            total_size: Price::zero(),
             open_size: Price::zero(),
         }
     }
 
-    pub fn total_size(&self) -> Price {
-        self.total_size
-    }
     pub fn open_size(&self) -> Price {
         self.open_size
     }
 
-    fn on_add(&mut self, ord: Rc<RefCell<Order>>) {
-        self.total_size += ord.borrow().orig_size;
-        self.orders.push_back(ord);
-    }
-
-    fn on_open(&mut self, size: Price) {
+    fn on_open(&mut self, ord: Rc<RefCell<Order>>) {
+        let size = ord.borrow().open_size;
         assert!(size >= Price::zero());
         self.open_size += size;
+        self.orders.push_back(ord);
     }
 
     fn on_match_maker(&mut self, size: Price) {
@@ -239,29 +231,25 @@ impl Book {
 impl Level3FeedListener for Book {
     fn on_add<'a>(&mut self, event: &NewOrderEvent<'a>) {
         let ord = Rc::new(RefCell::new(Order::from(event)));
-        let entry = {
-            self.orders.insert(event.order_id.to_owned(), ord.clone());
-            match &event.side {
-                &Side::Bid => self.bid.entry(event.price),
-                &Side::Ask => self.ask.entry(event.price),
-            }
-        };
-        entry.or_insert(PriceLevel::new()).on_add(ord);
+        self.orders.insert(event.order_id.to_owned(), ord.clone());
     }
 
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>) {
-        let (side, px) = {
-            let mut order = self.orders
-                .get(event.order_id)
-                .expect("Unknown order ID")
-                .borrow_mut();
-            order.on_open(event.remaining_size);
-            (order.side, order.price)
-        };
+        let shared_order = self.orders.get(event.order_id).expect("Unknown order ID");
 
-        self.price_level_mut(side, px)
-            .expect("Price level with order doesn't exist!")
-            .on_open(event.remaining_size);
+        {
+            let mut order = shared_order.borrow_mut();
+            order.on_open(event.remaining_size);
+        }
+
+        let order = shared_order.borrow();
+        let entry = match order.side {
+            Side::Bid => self.bid.entry(order.price),
+            Side::Ask => self.ask.entry(order.price),
+        };
+        entry
+            .or_insert(PriceLevel::new())
+            .on_open(shared_order.clone());
     }
 
     fn on_match<'a>(&mut self, event: &MatchEvent<'a>) {
@@ -386,38 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn total_size() {
-        let mut book = Book::new();
-        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
-        assert_eq!(
-            px(100.),
-            book.price_level(Side::Bid, px(10.00)).unwrap().total_size()
-        );
-        book.on_add(&new_event(&"order2", Side::Bid, Limit(px(10.00)), px(90.)));
-        book.on_add(&new_event(&"order3", Side::Ask, Limit(px(10.01)), px(90.)));
-        assert_eq!(
-            px(190.),
-            book.price_level(Side::Bid, px(10.00)).unwrap().total_size()
-        );
-        assert_eq!(
-            px(90.),
-            book.price_level(Side::Ask, px(10.01)).unwrap().total_size()
-        );
-    }
-
-    #[test]
     fn open_size() {
         let mut book = Book::new();
         book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
-        assert_eq!(
-            Price::zero(),
-            book.price_level(Side::Bid, px(10.00)).unwrap().open_size()
-        );
+        assert!(book.price_level(Side::Bid, px(10.00)).is_none());
         book.on_add(&new_event(&"order2", Side::Bid, Limit(px(10.00)), px(90.)));
-        assert_eq!(
-            Price::zero(),
-            book.price_level(Side::Bid, px(10.00)).unwrap().open_size()
-        );
+        assert!(book.price_level(Side::Bid, px(10.00)).is_none());
         book.on_open(&open_event(&"order2", px(90.)));
         assert_eq!(
             px(90.),
