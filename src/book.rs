@@ -26,13 +26,22 @@ impl PriceLevel {
         }
     }
 
-    fn add(&mut self, ord: Rc<RefCell<Order>>) {
+    pub fn total_size(&self) -> Price { self.total_size }
+    pub fn open_size(&self) -> Price { self.open_size }
+
+    fn on_add(&mut self, ord: Rc<RefCell<Order>>) {
         self.total_size += ord.borrow().orig_size;
         self.orders.push_back(ord);
     }
 
-    pub fn total_size(&self) -> Price { self.total_size }
-    pub fn open_size(&self) -> Price { self.open_size }
+    fn on_match_maker(&mut self, size: Price) {
+        //self.total_size -= size;
+        self.open_size -= size;
+    }
+
+    fn on_change(&mut self, delta: Price) {
+        self.open_size += delta;
+    }
 }
 
 pub trait Level2EventListener {
@@ -65,6 +74,10 @@ impl Order {
     }
 
     fn on_match_taker(&mut self, size: Price) {
+    }
+
+    fn on_change(&mut self, delta: Price) {
+        self.open_size += delta;
     }
 }
 
@@ -120,16 +133,16 @@ pub struct MatchEvent<'a> {
     price: Price,
     size: Price,
 }
-/*
+
 pub struct ChangeEvent<'a> {
     time: Time,
     seq: Sequence,
     order_id: &'a str,
-    price: OrderPrice,  // None indicates market order
+    price: OrderPrice,
     old_size_or_funds: Price,
     new_size_or_funds: Price,
 }
-
+/*
 pub struct DoneEvent<'a> {
     time: Time,
     seq: Sequence,
@@ -146,7 +159,7 @@ pub trait Level3FeedListener {
     fn on_add<'a>(&mut self, order: &NewOrderEvent<'a>);
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>);
     fn on_match<'a>(&mut self, event: &MatchEvent<'a>);
-    //fn on_change<E: ChangeEvent>(&mut self, event: &E);
+    fn on_change<'a>(&mut self, event: &ChangeEvent<'a>);
     //fn on_done<E: DoneEvent>(&mut self, event: &E);
 }
 
@@ -187,7 +200,7 @@ impl Level3FeedListener for Book {
                 &Side::Ask => self.ask.entry(event.px),
             }
         };
-        entry.or_insert(PriceLevel::new()).add(ord);
+        entry.or_insert(PriceLevel::new()).on_add(ord);
     }
 
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>) {
@@ -208,10 +221,23 @@ impl Level3FeedListener for Book {
             maker.on_match_maker(event.size);
             (maker.side, maker.px)
         };
-        self.orders.get(event.taker_order_id).expect("Unknown order ID").borrow_mut()
-            .on_match_taker(event.size);
+        // Currently, this doesn't do anything.
+        // self.orders.get(event.taker_order_id).expect("Unknown order ID").borrow_mut()
+        //     .on_match_taker(event.size);
         self.price_level_mut(maker_side, px).expect("Price level with order doesn't exist!")
-            .open_size -= event.size;
+            .on_match_maker(event.size);
+    }
+
+    fn on_change<'a>(&mut self, event: &ChangeEvent<'a>) {
+        let delta = event.new_size_or_funds - event.old_size_or_funds;
+        assert!(delta <= Price::zero());
+        let (side, px) = {
+            let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
+            order.on_change(delta);
+            (order.side, order.px)
+        };
+        self.price_level_mut(side, px).expect("Price level with order doesn't exist!")
+            .on_change(delta);
     }
 }
 
@@ -223,7 +249,8 @@ mod tests {
     fn px(p: f64) -> Price { Price::from(p) }
 
     fn new_event(order_id: &str, side: Side, px: OrderPrice, orig_size: Price) -> NewOrderEvent {
-        NewOrderEvent{ seq: Sequence(0), time: Time(0), order_id, side, px, orig_size, open_size: orig_size }
+        NewOrderEvent{ seq: Sequence(0), time: Time(0), order_id, side, px, orig_size,
+                       open_size: orig_size }
     }
 
     fn open_event(order_id: &str, remaining_size: Price) -> OpenEvent {
@@ -237,6 +264,12 @@ mod tests {
                        size: Price) -> MatchEvent<'a> {
         MatchEvent{ seq: Sequence(0), time: Time(0), maker_order_id, taker_order_id,
                     side, price, size }
+    }
+
+    fn change_event(order_id: &str, price: OrderPrice, old_size_or_funds: Price,
+                    new_size_or_funds: Price) -> ChangeEvent {
+        ChangeEvent{ seq: Sequence(0), time: Time(0), order_id, price, old_size_or_funds,
+                     new_size_or_funds }
     }
 
     #[test]
@@ -272,7 +305,7 @@ mod tests {
     }
 
     #[test]
-    fn test_market_match() {
+    fn market_match() {
         let mut book = Book::new();
         book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
         book.on_open(&open_event(&"order1", px(100.)));
@@ -280,4 +313,14 @@ mod tests {
         book.on_match(&match_event(&"order1", &"order2", Side::Bid, px( 9.99), px(40.)));
         assert_eq!(px(60.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
     }
+
+    #[test]
+    fn change() {
+        let mut book = Book::new();
+        book.on_add(&new_event(&"order1", Side::Ask, Limit(px(10.00)), px(100.)));
+        book.on_open(&open_event(&"order1", px(100.)));
+        book.on_change(&change_event(&"order1", Limit(px(10.00)), px(100.), px(40.)));
+        assert_eq!(px(40.), book.price_level(Side::Ask, px(10.00)).unwrap().open_size());
+    }
+
 }
