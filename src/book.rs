@@ -34,13 +34,26 @@ impl PriceLevel {
         self.orders.push_back(ord);
     }
 
+    fn on_open(&mut self, size: Price) {
+        assert!(size >= Price::zero());
+        self.open_size += size;
+    }
+
     fn on_match_maker(&mut self, size: Price) {
         //self.total_size -= size;
         self.open_size -= size;
+        assert!(self.open_size >= Price::zero());
     }
 
     fn on_change(&mut self, delta: Price) {
         self.open_size += delta;
+        assert!(self.open_size >= Price::zero());
+    }
+
+    fn on_done(&mut self, size: Price) {
+        assert!(size >= Price::zero());
+        self.open_size -= size;
+        assert!(self.open_size >= Price::zero());
     }
 }
 
@@ -66,11 +79,13 @@ impl Order {
     }
 
     fn on_open(&mut self, remaining_size: Price) {
+        assert!(remaining_size >= Price::zero());
         self.open_size = remaining_size;
     }
 
     fn on_match_maker(&mut self, size: Price) {
         self.open_size -= size;
+        assert!(self.open_size >= Price::zero());
     }
 
     fn on_match_taker(&mut self, size: Price) {
@@ -78,6 +93,14 @@ impl Order {
 
     fn on_change(&mut self, delta: Price) {
         self.open_size += delta;
+        assert!(self.open_size >= Price::zero());
+    }
+
+    fn on_done(&mut self, reason: DoneReason) -> Price {
+        if reason == DoneReason::Filled {
+            assert_eq!(Price::zero(), self.open_size);
+        }
+        self.open_size
     }
 }
 
@@ -103,6 +126,12 @@ pub struct Sequence(u64);
 pub enum OrderPrice {
     Market,
     Limit(Price),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum DoneReason {
+    Filled,
+    Canceled,
 }
 
 // Event structs. These include the data that is common to all feeds.
@@ -142,7 +171,7 @@ pub struct ChangeEvent<'a> {
     old_size_or_funds: Price,
     new_size_or_funds: Price,
 }
-/*
+
 pub struct DoneEvent<'a> {
     time: Time,
     seq: Sequence,
@@ -150,17 +179,12 @@ pub struct DoneEvent<'a> {
     reason: DoneReason,
 }
 
-pub enum DoneReason {
-    Filled,
-    Canceled,
-}
-*/
 pub trait Level3FeedListener {
     fn on_add<'a>(&mut self, order: &NewOrderEvent<'a>);
     fn on_open<'a>(&mut self, event: &OpenEvent<'a>);
     fn on_match<'a>(&mut self, event: &MatchEvent<'a>);
     fn on_change<'a>(&mut self, event: &ChangeEvent<'a>);
-    //fn on_done<E: DoneEvent>(&mut self, event: &E);
+    fn on_done<'a>(&mut self, event: &DoneEvent<'a>);
 }
 
 pub struct Book {
@@ -210,9 +234,9 @@ impl Level3FeedListener for Book {
             (order.side, order.px)
         };
 
-        let level = self.price_level_mut(side, px)
-                        .expect("Price level with order doesn't exist!");
-        level.open_size += event.remaining_size;
+        self.price_level_mut(side, px)
+            .expect("Price level with order doesn't exist!")
+            .on_open(event.remaining_size);
     }
 
     fn on_match<'a>(&mut self, event: &MatchEvent<'a>) {
@@ -238,6 +262,16 @@ impl Level3FeedListener for Book {
         };
         self.price_level_mut(side, px).expect("Price level with order doesn't exist!")
             .on_change(delta);
+    }
+
+    fn on_done<'a>(&mut self, event: &DoneEvent<'a>) {
+        let (side, px, size) = {
+            let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
+            let size = order.on_done(event.reason);
+            (order.side, order.px, size)
+        };
+        self.price_level_mut(side, px).expect("Price level with order doesn't exist!")
+            .on_done(size);
     }
 }
 
@@ -270,6 +304,10 @@ mod tests {
                     new_size_or_funds: Price) -> ChangeEvent {
         ChangeEvent{ seq: Sequence(0), time: Time(0), order_id, price, old_size_or_funds,
                      new_size_or_funds }
+    }
+
+    fn done_event(order_id: &str, reason: DoneReason) -> DoneEvent {
+        DoneEvent{ seq: Sequence(0), time: Time(0), order_id, reason }
     }
 
     #[test]
@@ -321,6 +359,32 @@ mod tests {
         book.on_open(&open_event(&"order1", px(100.)));
         book.on_change(&change_event(&"order1", Limit(px(10.00)), px(100.), px(40.)));
         assert_eq!(px(40.), book.price_level(Side::Ask, px(10.00)).unwrap().open_size());
+    }
+
+    #[test]
+    fn interacting_orders() {
+        let mut book = Book::new();
+        book.on_add(&new_event(&"order3", Side::Ask, Limit(px( 9.99)), px(50.)));
+        book.on_add(&new_event(&"order1", Side::Bid, Limit(px(10.00)), px(100.)));
+        book.on_add(&new_event(&"order2", Side::Bid, Limit(px(10.00)), px(90.)));
+
+        book.on_open(&open_event(&"order3", px(50.)));
+        book.on_open(&open_event(&"order1", px(100.)));
+        assert_eq!(px(50.), book.price_level(Side::Ask, px( 9.99)).unwrap().open_size());
+        assert_eq!(px(100.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
+
+        // orders 2 and 3 interact via a hidden limit on order 2
+        book.on_match(&match_event(&"order3", &"order2", Side::Ask, px( 9.99), px(50.)));
+        assert_eq!(px(0.), book.price_level(Side::Ask, px( 9.99)).unwrap().open_size());
+        book.on_done(&done_event(&"order3", DoneReason::Filled));
+        assert_eq!(px(0.), book.price_level(Side::Ask, px( 9.99)).unwrap().open_size());
+
+        book.on_open(&open_event(&"order2", px(40.)));
+        assert_eq!(px(140.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
+
+        // order 2 cancels its remaining qty
+        book.on_done(&done_event(&"order2", DoneReason::Canceled));
+        assert_eq!(px(100.), book.price_level(Side::Bid, px(10.00)).unwrap().open_size());
     }
 
 }
