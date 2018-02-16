@@ -48,10 +48,6 @@ impl SeqChecker {
         Event::NewProduct(&m.product_id)
     }
 
-    fn products(&self) -> Vec<&String> {
-        self.products.keys().collect()
-    }
-
     fn into_ranges(self) -> BTreeMap<String, SeqRange> {
         self.products
     }

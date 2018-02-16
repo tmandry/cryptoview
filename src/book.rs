@@ -1,3 +1,5 @@
+#![allow(dead_code)]  // TODO: remove
+
 /// Implementation of a level 3 book.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -68,14 +70,14 @@ type OrdersByPrice = BTreeMap<OrderPrice, PriceLevel>;
 pub struct Order {
     id: String,
     side: Side,
-    px: OrderPrice,
+    price: OrderPrice,
     orig_size: Price,
     open_size: Price,
 }
 
 impl Order {
-    pub fn new(id: String, side: Side, px: OrderPrice, size: Price) -> Order {
-        Order{id, side, px, orig_size: size, open_size: size}
+    pub fn new(id: String, side: Side, price: OrderPrice, size: Price) -> Order {
+        Order{id, side, price, orig_size: size, open_size: size}
     }
 
     fn on_open(&mut self, remaining_size: Price) {
@@ -88,7 +90,7 @@ impl Order {
         assert!(self.open_size >= Price::zero());
     }
 
-    fn on_match_taker(&mut self, size: Price) {
+    fn on_match_taker(&mut self, _size: Price) {
     }
 
     fn on_change(&mut self, delta: Price) {
@@ -109,7 +111,7 @@ impl<'a> From<&'a NewOrderEvent<'a>> for Order {
         Order{
             id: o.order_id.to_owned(),
             side: o.side,
-            px: o.px,
+            price: o.price,
             orig_size: o.orig_size,
             open_size: o.open_size,
         }
@@ -117,7 +119,9 @@ impl<'a> From<&'a NewOrderEvent<'a>> for Order {
 }
 
 #[derive(Copy, Clone, Debug)]
-pub struct Time(u64);
+pub struct Timestamp(u64);
+
+/// The sequence number of the source event.
 #[derive(Copy, Clone, Debug)]
 pub struct Sequence(u64);
 
@@ -138,24 +142,24 @@ pub enum DoneReason {
 
 pub struct NewOrderEvent<'a> {
     seq: Sequence,
-    time: Time,
+    time: Timestamp,
     order_id: &'a str,
     side: Side,
-    px: OrderPrice,
+    price: OrderPrice,
     orig_size: Price,
     open_size: Price,
 }
 
 pub struct OpenEvent<'a> {
     seq: Sequence,
-    time: Time,
+    time: Timestamp,
     order_id: &'a str,
     remaining_size: Price,
 }
 
 pub struct MatchEvent<'a> {
     seq: Sequence,
-    time: Time,
+    time: Timestamp,
     maker_order_id: &'a str,
     taker_order_id: &'a str,
     side: Side,
@@ -164,7 +168,7 @@ pub struct MatchEvent<'a> {
 }
 
 pub struct ChangeEvent<'a> {
-    time: Time,
+    time: Timestamp,
     seq: Sequence,
     order_id: &'a str,
     price: OrderPrice,
@@ -173,7 +177,7 @@ pub struct ChangeEvent<'a> {
 }
 
 pub struct DoneEvent<'a> {
-    time: Time,
+    time: Timestamp,
     seq: Sequence,
     order_id: &'a str,
     reason: DoneReason,
@@ -220,8 +224,8 @@ impl Level3FeedListener for Book {
         let entry = {
             self.orders.insert(event.order_id.to_owned(), ord.clone());
             match &event.side {
-                &Side::Bid => self.bid.entry(event.px),
-                &Side::Ask => self.ask.entry(event.px),
+                &Side::Bid => self.bid.entry(event.price),
+                &Side::Ask => self.ask.entry(event.price),
             }
         };
         entry.or_insert(PriceLevel::new()).on_add(ord);
@@ -231,7 +235,7 @@ impl Level3FeedListener for Book {
         let (side, px) = {
             let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
             order.on_open(event.remaining_size);
-            (order.side, order.px)
+            (order.side, order.price)
         };
 
         self.price_level_mut(side, px)
@@ -243,7 +247,7 @@ impl Level3FeedListener for Book {
         let (maker_side, px) = {
             let mut maker = self.orders.get(event.maker_order_id).expect("Unknown order ID").borrow_mut();
             maker.on_match_maker(event.size);
-            (maker.side, maker.px)
+            (maker.side, maker.price)
         };
         // Currently, this doesn't do anything.
         // self.orders.get(event.taker_order_id).expect("Unknown order ID").borrow_mut()
@@ -258,7 +262,7 @@ impl Level3FeedListener for Book {
         let (side, px) = {
             let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
             order.on_change(delta);
-            (order.side, order.px)
+            (order.side, order.price)
         };
         self.price_level_mut(side, px).expect("Price level with order doesn't exist!")
             .on_change(delta);
@@ -268,7 +272,7 @@ impl Level3FeedListener for Book {
         let (side, px, size) = {
             let mut order = self.orders.get(event.order_id).expect("Unknown order ID").borrow_mut();
             let size = order.on_done(event.reason);
-            (order.side, order.px, size)
+            (order.side, order.price, size)
         };
         self.price_level_mut(side, px).expect("Price level with order doesn't exist!")
             .on_done(size);
@@ -282,13 +286,13 @@ mod tests {
 
     fn px(p: f64) -> Price { Price::from(p) }
 
-    fn new_event(order_id: &str, side: Side, px: OrderPrice, orig_size: Price) -> NewOrderEvent {
-        NewOrderEvent{ seq: Sequence(0), time: Time(0), order_id, side, px, orig_size,
+    fn new_event(order_id: &str, side: Side, price: OrderPrice, orig_size: Price) -> NewOrderEvent {
+        NewOrderEvent{ seq: Sequence(0), time: Timestamp(0), order_id, side, price, orig_size,
                        open_size: orig_size }
     }
 
     fn open_event(order_id: &str, remaining_size: Price) -> OpenEvent {
-        OpenEvent{ seq: Sequence(0), time: Time(0), order_id, remaining_size }
+        OpenEvent{ seq: Sequence(0), time: Timestamp(0), order_id, remaining_size }
     }
 
     fn match_event<'a>(maker_order_id: &'a str,
@@ -296,18 +300,18 @@ mod tests {
                        side: Side,
                        price: Price,
                        size: Price) -> MatchEvent<'a> {
-        MatchEvent{ seq: Sequence(0), time: Time(0), maker_order_id, taker_order_id,
+        MatchEvent{ seq: Sequence(0), time: Timestamp(0), maker_order_id, taker_order_id,
                     side, price, size }
     }
 
     fn change_event(order_id: &str, price: OrderPrice, old_size_or_funds: Price,
                     new_size_or_funds: Price) -> ChangeEvent {
-        ChangeEvent{ seq: Sequence(0), time: Time(0), order_id, price, old_size_or_funds,
+        ChangeEvent{ seq: Sequence(0), time: Timestamp(0), order_id, price, old_size_or_funds,
                      new_size_or_funds }
     }
 
     fn done_event(order_id: &str, reason: DoneReason) -> DoneEvent {
-        DoneEvent{ seq: Sequence(0), time: Time(0), order_id, reason }
+        DoneEvent{ seq: Sequence(0), time: Timestamp(0), order_id, reason }
     }
 
     #[test]
