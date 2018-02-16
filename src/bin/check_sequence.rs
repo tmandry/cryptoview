@@ -1,7 +1,8 @@
 extern crate flate2;
 extern crate rayon;
 extern crate serde;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 extern crate serde_json;
 
 use rayon::prelude::*;
@@ -29,7 +30,9 @@ struct SeqChecker {
 
 impl SeqChecker {
     fn new() -> SeqChecker {
-        SeqChecker{ products: BTreeMap::new() }
+        SeqChecker {
+            products: BTreeMap::new(),
+        }
     }
 
     fn update<'b>(&mut self, m: &'b Message) -> Event<'b> {
@@ -41,10 +44,16 @@ impl SeqChecker {
                     return Event::Skipped(&m.product_id, last_sequence, m.sequence);
                 }
                 return Event::Ok;
-            },
-            None => {},
+            }
+            None => {}
         }
-        self.products.insert(m.product_id.clone(), SeqRange{ begin: m.sequence, end: m.sequence });
+        self.products.insert(
+            m.product_id.clone(),
+            SeqRange {
+                begin: m.sequence,
+                end: m.sequence,
+            },
+        );
         Event::NewProduct(&m.product_id)
     }
 
@@ -70,14 +79,16 @@ fn process_file(filename: &String) -> BTreeMap<String, SeqRange> {
     for line in b.lines() {
         let m: Message = serde_json::from_str(&line.unwrap()).expect("failed to parse JSON");
         match checker.update(&m) {
-            Event::Ok => {},
+            Event::Ok => {}
             Event::NewProduct(p) => {
                 products.push(p.to_owned());
-            },
+            }
             Event::Skipped(p, last, new) => {
-                println!("{}: Skipped sequence numbers between {} and {} on product {}",
-                         filename, last, new, p);
-            },
+                println!(
+                    "{}: Skipped sequence numbers between {} and {} on product {}",
+                    filename, last, new, p
+                );
+            }
         }
     }
 
@@ -94,10 +105,16 @@ fn main() {
 
     // TODO: I'm sure we could do this more intelligently
     for i in 1..ranges.len() {
-        for product in ranges[i-1].keys() {
-            if ranges[i-1][product].end + 1 != ranges[i][product].begin {
-                println!("Gap detected between files {} and {} on {}: end seq {}, begin seq {}",
-                         files[i-1], files[i], product, ranges[i-1][product].end, ranges[i][product].begin);
+        for product in ranges[i - 1].keys() {
+            if ranges[i - 1][product].end + 1 != ranges[i][product].begin {
+                println!(
+                    "Gap detected between files {} and {} on {}: end seq {}, begin seq {}",
+                    files[i - 1],
+                    files[i],
+                    product,
+                    ranges[i - 1][product].end,
+                    ranges[i][product].begin
+                );
             }
         }
     }

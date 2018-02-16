@@ -1,6 +1,7 @@
 extern crate flate2;
 extern crate serde;
-#[macro_use] extern crate serde_derive;
+#[macro_use]
+extern crate serde_derive;
 extern crate serde_json;
 
 use std::env;
@@ -11,10 +12,8 @@ use flate2::read::GzDecoder;
 #[derive(Deserialize, Debug)]
 struct BookSnapshot {
     sequence: u64,
-    #[allow(dead_code)]
-    bids: Vec<Vec<String>>,
-    #[allow(dead_code)]
-    asks: Vec<Vec<String>>,
+    #[allow(dead_code)] bids: Vec<Vec<String>>,
+    #[allow(dead_code)] asks: Vec<Vec<String>>,
 }
 
 fn main() {

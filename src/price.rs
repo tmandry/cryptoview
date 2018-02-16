@@ -5,8 +5,8 @@ use std::fmt::Display;
 use std::num::ParseFloatError;
 
 const WHOLE: i64 = 100000000;
-const CENT: i64 = WHOLE / 100;       // always displayed up to this precision
-const FRACTIONAL_DIGITS: usize = 6;  // these are only displayed when used
+const CENT: i64 = WHOLE / 100; // always displayed up to this precision
+const FRACTIONAL_DIGITS: usize = 6; // these are only displayed when used
 const FROM_WHOLE: f64 = 1.0 / WHOLE as f64;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -27,7 +27,9 @@ impl Ord for Price {
 }
 
 impl Price {
-    pub fn zero() -> Price { Price{ val: 0 } }
+    pub fn zero() -> Price {
+        Price { val: 0 }
+    }
 
     pub fn parse(s: &str) -> Result<Price, ParseFloatError> {
         /*
@@ -49,7 +51,9 @@ impl Price {
 
 impl From<f64> for Price {
     fn from(px: f64) -> Self {
-        Price{ val: (px * WHOLE as f64) as i64 }
+        Price {
+            val: (px * WHOLE as f64) as i64,
+        }
     }
 }
 
@@ -62,7 +66,9 @@ impl From<Price> for f64 {
 impl ops::Add for Price {
     type Output = Self;
     fn add(self, rhs: Self) -> Self {
-        Price{ val: self.val + rhs.val }
+        Price {
+            val: self.val + rhs.val,
+        }
     }
 }
 
@@ -75,7 +81,9 @@ impl ops::AddAssign for Price {
 impl ops::Sub for Price {
     type Output = Self;
     fn sub(self, rhs: Self) -> Self {
-        Price{ val: self.val - rhs.val }
+        Price {
+            val: self.val - rhs.val,
+        }
     }
 }
 
@@ -89,7 +97,9 @@ impl ops::SubAssign for Price {
 impl ops::Mul<i64> for Price {
     type Output = Self;
     fn mul(self, rhs: i64) -> Self {
-        Price{ val: rhs * self.val }
+        Price {
+            val: rhs * self.val,
+        }
     }
 }
 
@@ -103,7 +113,9 @@ impl ops::MulAssign<i64> for Price {
 impl ops::Mul<Price> for i64 {
     type Output = Price;
     fn mul(self, rhs: Price) -> Price {
-        Price{ val: self * rhs.val }
+        Price {
+            val: self * rhs.val,
+        }
     }
 }
 
@@ -111,7 +123,9 @@ impl ops::Mul<Price> for i64 {
 impl ops::Div<i64> for Price {
     type Output = Self;
     fn div(self, rhs: i64) -> Self {
-        Price{ val: self.val / rhs }
+        Price {
+            val: self.val / rhs,
+        }
     }
 }
 
