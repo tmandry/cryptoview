@@ -4,7 +4,10 @@ version = "0.1.0"
 authors = ["Tyler Mandry <tmandry@gmail.com>"]
 
 [dependencies]
+chrono = { version = "0.4", features = ["serde"] }
 flate2 = "1.0"
+futures = "0.1"
+glob = "0.2"
 rayon = "0.9"
 serde = "1.0"
 serde_derive = "1.0"
