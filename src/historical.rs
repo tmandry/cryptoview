@@ -1,4 +1,4 @@
-mod feed {
+pub mod feed {
     use std::collections::{hash_map, HashMap};
     use std::io;
     use std::io::{BufRead, BufReader, Read};
