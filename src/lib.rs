@@ -3,6 +3,7 @@ extern crate flate2;
 extern crate futures;
 extern crate glob;
 extern crate serde;
+extern crate tokio;
 
 pub mod book;
 pub mod historical;

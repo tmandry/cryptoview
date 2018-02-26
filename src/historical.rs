@@ -1,5 +1,4 @@
 mod feed {
-    use std::borrow::BorrowMut;
     use std::collections::{hash_map, HashMap};
     use std::io;
     use std::io::{BufRead, BufReader, Read};
@@ -40,6 +39,8 @@ mod feed {
         }
     }
 
+    /// Finds the chunk of websocket messages starting before start_time.
+    /// If found, returns a Stream of messages.
     pub fn chunk_starting_approx<'a>(
         start_time: DateTime<Utc>,
     ) -> Result<Box<Stream<Item = String, Error = io::Error>>, io::Error> {
@@ -57,13 +58,15 @@ mod feed {
         Ok(Box::new(stream))
     }
 
+    /// Returns a book snapshot from around start_time.
     pub fn snapshot_starting_approx(
         start_time: DateTime<Utc>,
     ) -> Box<Future<Item = HashMap<String, PathBuf>, Error = io::Error>> {
-        snapshot_starting_approx_impl::<DefaultGlob>(start_time)
+        // TODO: Open snapshots...
+        get_best_snapshot_per_product::<DefaultGlob>(start_time)
     }
 
-    fn snapshot_starting_approx_impl<G: Glob>(
+    fn get_best_snapshot_per_product<G: Glob>(
         start_time: DateTime<Utc>,
     ) -> Box<Future<Item = HashMap<String, PathBuf>, Error = io::Error>> {
         let pattern = start_time
@@ -98,28 +101,88 @@ mod feed {
         use super::*;
 
         use std::path::PathBuf;
-        use std::slice;
-        use std::mem;
         use std::vec;
 
         use chrono::{TimeZone, Utc};
-        use futures::Future;
         use glob;
+        use futures::future::FutureResult;
+        use tokio::executor::current_thread;
 
         #[test]
-        fn test() {
+        fn get_best_snapshot() {
             struct TestGlob;
             impl<'a> Glob for TestGlob {
                 type Paths = vec::IntoIter<Result<PathBuf, glob::GlobError>>;
                 fn glob(pattern: &str) -> Result<Self::Paths, glob::PatternError> {
-                    let glob_result: Vec<Result<PathBuf, glob::GlobError>> =
-                        vec![Result::Ok(PathBuf::from("data/blahblah.json.gz"))];
+                    let files = vec![
+                        "data/BTC-USD_20180225_170132.json.gz",
+                        "data/BTC-USD_20180225_170017.json.gz",
+                        "data/BTC-USD_20170225_170000.json.gz",
+                        "data/BTC-EUR_20180225_170000.json.gz",
+                    ];
+                    let pattern = glob::Pattern::new(pattern)?;
+                    let glob_result: Vec<Result<PathBuf, glob::GlobError>> = files
+                        .into_iter()
+                        .filter(|s| pattern.matches(s))
+                        .map(|s| Result::Ok(PathBuf::from(s)))
+                        .collect();
                     Result::Ok(glob_result.into_iter())
                 }
             }
-            let result =
-                snapshot_starting_approx_impl::<TestGlob>(Utc.ymd(2017, 11, 9).and_hms(0, 0, 0));
-            panic!("{:?}", result.wait().unwrap());
+
+            current_thread::run(|_| {
+                let query = Utc.ymd(2018, 2, 25).and_hms(17, 0, 0);
+                let fut = get_best_snapshot_per_product::<TestGlob>(query)
+                    .and_then(|result| {
+                        let mut expected = HashMap::new();
+                        expected.insert(
+                            "BTC-USD".into(),
+                            PathBuf::from("data/BTC-USD_20180225_170017.json.gz"),
+                        );
+                        expected.insert(
+                            "BTC-EUR".into(),
+                            PathBuf::from("data/BTC-EUR_20180225_170000.json.gz"),
+                        );
+                        assert_eq!(expected, result);
+                        Ok(())
+                    })
+                    .or_else(|_| -> FutureResult<(), ()> {
+                        panic!("get_best_snapshot_per_product failed");
+                    });
+                current_thread::spawn(fut);
+            });
+
+            current_thread::run(|_| {
+                let query = Utc.ymd(2017, 2, 25).and_hms(17, 0, 0);
+                let fut = get_best_snapshot_per_product::<TestGlob>(query)
+                    .and_then(|result| {
+                        let mut expected = HashMap::new();
+                        expected.insert(
+                            "BTC-USD".into(),
+                            PathBuf::from("data/BTC-USD_20170225_170000.json.gz"),
+                        );
+                        assert_eq!(expected, result);
+                        Ok(())
+                    })
+                    .or_else(|_| -> FutureResult<(), ()> {
+                        panic!("get_best_snapshot_per_product failed");
+                    });
+                current_thread::spawn(fut);
+            });
+
+            current_thread::run(|_| {
+                let query = Utc.ymd(2017, 2, 25).and_hms(18, 0, 0);
+                let fut = get_best_snapshot_per_product::<TestGlob>(query)
+                    .and_then(|result| {
+                        let mut expected = HashMap::new();
+                        assert_eq!(expected, result);
+                        Ok(())
+                    })
+                    .or_else(|_| -> FutureResult<(), ()> {
+                        panic!("get_best_snapshot_per_product failed");
+                    });
+                current_thread::spawn(fut);
+            });
         }
     }
 }
